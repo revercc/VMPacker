@@ -28,13 +28,23 @@ import (
 //   tr_special.go   — 特殊指令 (ADRP/ADR)
 // ============================================================
 
+// Relocation 表示一个需要重定位的条目
+type Relocation struct {
+	BcOffset   uint64 // 待重定位指令在 原始字节码 中的偏移
+	Symbol     string // 符号名（如果是外部符号）
+	TargetAddr uint64 // 原始目标地址（用于内部）
+	IsInternal bool   // 是否是函数内部调用
+	FuncName   string // 所属函数名
+}
+
 // TranslateResult 翻译结果
 type TranslateResult struct {
-	Bytecode    []byte   // 生成的 VM 字节码 (含 trailer)
-	CodeLen     int      // 纯字节码长度 (不含 trailer，用于 opcode 加密范围)
-	Unsupported []string // 不支持的指令列表
-	TotalInsts  int      // 总指令数
-	TransInsts  int      // 已翻译指令数
+	Bytecode    []byte       // 生成的 VM 字节码 (含 trailer)
+	CodeLen     int          // 纯字节码长度 (不含 trailer，用于 opcode 加密范围)
+	Unsupported []string     // 不支持的指令列表
+	TotalInsts  int          // 总指令数
+	TransInsts  int          // 已翻译指令数
+	Relocations []Relocation // 重定位信息
 }
 
 // DebugEntry 单条指令的 debug 对照信息
@@ -48,15 +58,17 @@ type DebugEntry struct {
 
 // Translator ARM64 → VM 翻译器
 type Translator struct {
-	code        []byte        // 输出缓冲
-	labels      map[int]int   // ARM64偏移 → VM字节码位置 映射
-	fixups      []branchFixup // 待修补的分支目标
-	funcSize    int           // 原函数大小（字节）
-	funcAddr    uint64        // 原函数起始地址
-	unsupported []string
-	decoder     *Decoder     // 解码器引用（用于名称查找）
-	debug       bool         // debug 模式
-	debugLog    []DebugEntry // debug 对照记录
+	code            []byte        // 输出缓冲
+	labels          map[int]int   // ARM64偏移 → VM字节码位置 映射
+	fixups          []branchFixup // 待修补的分支目标
+	funcSize        int           // 原函数大小（字节）
+	funcAddr        uint64        // 原函数起始地址
+	unsupported     []string
+	decoder         *Decoder     // 解码器引用（用于名称查找）
+	debug           bool         // debug 模式
+	debugLog        []DebugEntry // debug 对照记录
+	currentFuncName string       // 当前正在翻译的函数名
+	relocations     []Relocation // 记录所有需要重定位的位置
 }
 
 type branchFixup struct {
@@ -66,13 +78,14 @@ type branchFixup struct {
 }
 
 // NewTranslator 创建翻译器
-func NewTranslator(funcAddr uint64, funcSize int) *Translator {
+func NewTranslator(funcAddr uint64, funcSize int, funcName string) *Translator {
 	return &Translator{
-		code:     make([]byte, 0, funcSize*4),
-		labels:   make(map[int]int),
-		funcAddr: funcAddr,
-		funcSize: funcSize,
-		decoder:  NewDecoder(),
+		code:            make([]byte, 0, funcSize*4),
+		labels:          make(map[int]int),
+		funcAddr:        funcAddr,
+		funcSize:        funcSize,
+		decoder:         NewDecoder(),
+		currentFuncName: funcName,
 	}
 }
 
@@ -216,6 +229,11 @@ func (t *Translator) Translate(instructions []vm.Instruction) (*TranslateResult,
 	t.emitU32(mapCount)
 	t.emitU64(t.funcAddr)
 	t.emitU32(uint32(t.funcSize))
+
+	// 记录重定位信息
+	if len(t.relocations) > 0 {
+		result.Relocations = t.relocations
+	}
 
 	result.Bytecode = t.code
 	result.Unsupported = t.unsupported

@@ -63,19 +63,85 @@ static inline void sys_munmap(void *addr, unsigned long size) {
   __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1) : "memory");
 }
 
+/* ---- syscall: openat ---- */
+static inline long sys_open(const char *pathname, int flags, int mode) {
+    register long x8 __asm__("x8") = 56;  /* __NR_openat */
+    register long x0 __asm__("x0") = -100;  /* AT_FDCWD -100, 表示当前目录 */
+    register long x1 __asm__("x1") = (long)pathname;
+    register long x2 __asm__("x2") = flags;
+    register long x3 __asm__("x3") = mode;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory");
+    return (long)x0;
+}
+
+/* ---- syscall: read ---- */
+static inline long sys_read(int fd, void *buf, unsigned long count) {
+    register long x8 __asm__("x8") = 63;  /* __NR_read */
+    register long x0 __asm__("x0") = fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = count;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+    return (long)x0;
+}
+
+/* ---- syscall: close ---- */
+static inline long sys_close(int fd) {
+    register long x8 __asm__("x8") = 57;  /* __NR_close */
+    register long x0 __asm__("x0") = fd;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory");
+    return (long)x0;
+}
+
+/* 如果无法包含 sys/mman.h，可以自己定义 */
+#ifndef PROT_READ
+#define PROT_READ       0x1  /* 页可读 */
+#define PROT_WRITE      0x2  /* 页可写 */
+#define PROT_EXEC       0x4  /* 页可执行 */
+#define PROT_NONE       0x0  /* 页不可访问 */
+#endif
+
+/* ---- syscall: mprotect ---- */
+static inline long sys_mprotect(void *addr, unsigned long len, unsigned long prot) {
+    register long x8 __asm__("x8") = 226;  /* __NR_mprotect for aarch64 */
+    register long x0 __asm__("x0") = (long)addr;
+    register long x1 __asm__("x1") = len;
+    register long x2 __asm__("x2") = prot;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+    return (long)x0;
+}
+
+/* ---- helper: 临时启用代码段写入 ---- */
+static inline long enable_text_write(void *text_addr, unsigned long size) {
+    return sys_mprotect(text_addr, size, PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+
+/* ---- helper: 恢复代码段只读 ---- */
+static inline long disable_text_write(void *text_addr, unsigned long size) {
+    return sys_mprotect(text_addr, size, PROT_READ | PROT_EXEC);
+}
+
+
 /*
  * vm_entry — VM 解释器入口
  *
  * 参数:
- *   args    : 指向保存的 X0-X7, callerFP, callerLR (共10个u64)
+ *   args             : 指向保存的 X0-X7, callerFP, callerLR (共10个u64)
+ *   table_addr       : token 描述符表的实际地址
+ *   table_num        : token 描述符表的条目数量
+ *   current_func_id  : 当前函数的 token ID (由 trampoline 传入)
  *   enc_bc  : XOR 加密的字节码
  *   bc_len  : 字节码长度
  *   xor_key : XOR 解密密钥
  *
  * 返回: R[0] (模拟 X0 返回值)
  */
-__attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, u8 *enc_bc,
-                                                     u32 bc_len, u8 xor_key);
+__attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, 
+                                                    u64 table_addr, u64 table_num, 
+                                                    u32 current_func_id,
+                                                    u8 *enc_bc, u32 bc_len, u8 xor_key);
+
+// 通过 maps 获取指定so基地址
+__attribute__((section(".text.entry"))) u64 get_so_base_by_name(const char *so_name);
 
 /* ================================================================
  * Token 化入口 (条件编译)
@@ -89,9 +155,12 @@ __attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, u8 *enc_bc,
  * vm_entry_token_asm 负责保存寄存器并调用 vm_entry_token_inner。
  * ================================================================ */
 /* TOKEN_ONLY: Token 入口始终编译 */
-
+// 所有 sections 合并到一个可执行段, 所以在执行时所有的全局变量只能读，不能写入
 /* Packer 在 payload 中 patch 此变量为 token 描述符表的 VA */
 __attribute__((section(".data.entry"), used)) volatile u64 _token_table_va = 0;
+
+/* so base */
+__attribute__((section(".data.entry"), used)) volatile u64 _so_base = 0;
 
 /* 内部 C 函数: 解码 token 并调用 vm_entry */
 __attribute__((noinline, section(".text.entry"))) u64
@@ -109,6 +178,9 @@ vm_entry_token_inner(u64 *args, u32 token) {
     return 0; /* 表未初始化, 安全退出 */
 
   token_desc_t *table = (token_desc_t *)(self_va + tbl_off);
+  u64 table_addr = (u64)table;
+  u64 table_num = *((u64 *)(((u8*)(table)) - 8));
+
   /* bc_off 也是相对于 _token_table_va 的偏移 */
   u8 *enc_bc = (u8 *)(self_va + table[func_id].bc_off);
   u32 bc_len = table[func_id].bc_len;
@@ -116,7 +188,7 @@ vm_entry_token_inner(u64 *args, u32 token) {
   if (__builtin_expect(enc_bc == (u8 *)self_va || bc_len == 0, 0))
     return 0; /* 无效条目, 安全退出 */
 
-  return vm_entry(args, enc_bc, bc_len, xor_key);
+  return vm_entry(args, table_addr, table_num, func_id, enc_bc, bc_len, xor_key);
 }
 
 /* Naked 汇编入口: 保存调用方寄存器, 调用 C 内部函数 */
@@ -142,8 +214,10 @@ __attribute__((naked, section(".text.entry"), used)) void vm_entry_token(void) {
 /* end TOKEN_ONLY */
 
 /* ---- vm_entry 实现 ---- */
-__attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, u8 *enc_bc,
-                                                     u32 bc_len, u8 xor_key) {
+__attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, 
+                                                    u64 table_addr, u64 table_num, 
+                                                    u32 current_func_id,
+                                                    u8 *enc_bc, u32 bc_len, u8 xor_key) {
   u64 ret = 0;
 
   /* ---- 1. 动态分配字节码缓冲区 (mmap, 替代栈上 64KB) ---- */
@@ -222,6 +296,53 @@ __attribute__((section(".text.entry"))) u64 vm_entry(u64 *args, u8 *enc_bc,
         }
         vm->addr_map[k + 1].arm64_off = t_arm;
         vm->addr_map[k + 1].vm_off = t_vm;
+      }
+
+      // 获取so name （紧跟在 token_desc_t 之后）
+      // 0x10 为 token_desc_t 长度
+      u8 *so_name_info = (u8*)(table_addr + sizeof(token_desc_t) * table_num);
+      u8 so_name_len = so_name_info[0];
+      u8 *so_name = so_name_info + 1;
+      if(_so_base == 0){
+        // 获取 so 基地址并写入全局变量 (需要临时启用代码段写入权限)
+        unsigned long page_size = 4096;  // 通常 ARM64 页大小
+        unsigned long addr = (unsigned long)&_so_base;
+        unsigned long page_start = addr & ~(page_size - 1);
+        unsigned long page_end = (addr + sizeof(_so_base) + page_size - 1) & ~(page_size - 1);
+        unsigned long len = page_end - page_start;
+        enable_text_write((void *)page_start, len);
+        _so_base = get_so_base_by_name((char*)so_name);
+        disable_text_write((void *)page_start, len);
+      }
+
+      /* 
+      * 检查是否有额外的重定位表
+      * 重定位表格式 (紧跟在 so_name_info 之后, 可选):
+      */
+      /* 解析重定位表 */
+      u8 *reloc_table_start = (u8*)((u64)so_name_info + so_name_len + 2);
+      u32 magic = rd32(reloc_table_start);
+      if (magic == 0x524C5452) { /* "RTLR" 魔数 */
+        u32 reloc_count = rd32(reloc_table_start + 4);
+        u8 *reloc_entry = reloc_table_start + 8;
+        for (u32 i = 0; i < reloc_count; i++) {
+          // 获取 函数 id
+          u64 func_id = rd64(reloc_entry);
+          if(func_id == current_func_id){
+            // 获取 待重定位数据地址
+            u64 *write_pos = (u64*)(bc_buf + rd64(reloc_entry + 8));
+            /* 基址相对: *write_pos = _so_base + offset */
+            u64 offset = rd64(reloc_entry + 16);
+            *write_pos = _so_base + offset;
+          }
+          if(func_id > current_func_id){
+            // 重定位按 func_id 升序排列
+            // 遇到更大 func_id 可以停止
+            break;
+          }
+          // 下一条重定位记录 (24B)
+          reloc_entry += 24;
+        }
       }
     } else {
       /* 无 BR map: 只剥离 21B 固定 trailer */
@@ -665,4 +786,144 @@ cleanup:
   sys_munmap(vm, ctx_alloc);
   sys_munmap(bc_buf, alloc_size);
   return ret;
+}
+
+__attribute__((section(".text.entry"))) u64 get_so_base_by_name(const char *so_name) {
+    /* 使用局部数组，但不初始化 */
+    char buf[1024];
+    char line[256];
+    char perm[5];
+    char path[256];
+    int fd;
+    long n;
+    int i, j;
+    char *p;
+    int bytes_in_buf = 0;
+    u64 base = 0;
+
+    /* 手动清零必要的数组（使用循环，避免 memset）*/
+    for (i = 0; i < 1024; i++) buf[i] = 0;
+    for (i = 0; i < 256; i++) {
+        line[i] = 0;
+        path[i] = 0;
+    }
+    for (i = 0; i < 5; i++) perm[i] = 0;
+
+    /* 打开 /proc/self/maps */
+    fd = sys_open("/proc/self/maps", 0, 0);
+    if (fd < 0) return 0;
+    
+    while (1) {
+        n = sys_read(fd, buf + bytes_in_buf, sizeof(buf) - bytes_in_buf - 1);
+        if (n <= 0) break;
+        
+        bytes_in_buf += n;
+        buf[bytes_in_buf] = '\0';
+        
+        p = buf;
+        while (*p) {
+            u64 start = 0, end_addr = 0;
+            char *s;
+            char *line_end;
+            int path_len = 0;
+            
+            /* 找到行结束位置 */
+            line_end = p;
+            while (*line_end && *line_end != '\n') line_end++;
+            
+            /* 复制当前行到 line (手动) */
+            s = p;
+            i = 0;
+            while (s < line_end && i < 255) {
+                line[i++] = *s++;
+            }
+            line[i] = '\0';
+            
+            /* 解析起始地址 */
+            s = line;
+            while (*s && *s != '-') {
+                char c = *s++;
+                if (c >= '0' && c <= '9') start = (start << 4) | (c - '0');
+                else if (c >= 'a' && c <= 'f') start = (start << 4) | (c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') start = (start << 4) | (c - 'A' + 10);
+            }
+            
+            /* 解析结束地址 */
+            if (*s == '-') s++;
+            while (*s && *s != ' ') {
+                char c = *s++;
+                if (c >= '0' && c <= '9') end_addr = (end_addr << 4) | (c - '0');
+                else if (c >= 'a' && c <= 'f') end_addr = (end_addr << 4) | (c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') end_addr = (end_addr << 4) | (c - 'A' + 10);
+            }
+            
+            /* 跳过空格，读取权限 */
+            while (*s == ' ') s++;
+            for (i = 0; i < 4 && *s && *s != ' '; i++) {
+                perm[i] = *s++;
+            }
+            perm[i] = '\0';
+            
+            /* 跳过 offset, dev, inode */
+            while (*s == ' ') s++;
+            while (*s && *s != ' ') s++;
+            while (*s == ' ') s++;
+            while (*s && *s != ' ') s++;
+            while (*s == ' ') s++;
+            while (*s && *s != ' ') s++;
+            
+            /* 读取路径 */
+            while (*s == ' ') s++;
+            if (*s && *s != '\n') {
+                path_len = 0;
+                while (*s && *s != '\n' && path_len < 255) {
+                    path[path_len++] = *s++;
+                }
+                path[path_len] = '\0';
+            }
+            
+            /* 检查路径是否包含 SO 名字，且有执行权限 */
+            if (path_len > 0 && perm[2] == 'x') {
+                /* 找到路径中的文件名部分 */
+                const char *path_p = path;
+                while (*path_p) path_p++;
+                while (path_p > path && *path_p != '/') path_p--;
+                if (*path_p == '/') path_p++;
+                
+                /* 比较文件名 */
+                const char *p1 = path_p;
+                const char *p2 = so_name;
+                while (*p1 && *p2 && *p1 == *p2) {
+                    p1++;
+                    p2++;
+                }
+                if (!*p2 && (*p1 == '\0' || *p1 == '.')) {
+                    base = start;
+                    goto cleanup;
+                }
+            }
+            
+            /* 移动到下一行 */
+            if (*line_end == '\n') {
+                p = line_end + 1;
+            } else {
+                break;
+            }
+        }
+        
+        /* 移动剩余数据到缓冲区开头 */
+        if (p < buf + bytes_in_buf) {
+            int remaining = buf + bytes_in_buf - p;
+            for (i = 0; i < remaining; i++) {
+                buf[i] = p[i];
+            }
+            bytes_in_buf = remaining;
+        } else {
+            bytes_in_buf = 0;
+        }
+    }
+
+cleanup:
+    sys_close(fd);
+    return base;
 }

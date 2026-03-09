@@ -1,19 +1,25 @@
 # ============================================================
-# VMP 工具链 Makefile
+# VMP 工具链 Makefile (macOS + Android NDK)
 # make all    → 编译 C stub → 嵌入 Go → 输出到 build/
 # make stub   → 仅编译 VM 解释器 blob
 # make packer → 仅编译 Go packer（需先 make stub）
+# make gui    → 编译 GUI 版本
 # make demo   → 交叉编译 demo 程序
 # make test   → 运行 Go 单元测试
 # make clean  → 清理所有产物
 # ============================================================
 
-# 交叉编译工具链
-CROSS   ?= aarch64-linux-gnu-
-CC       = $(CROSS)gcc
-LD       = $(CROSS)ld
-OBJCOPY  = $(CROSS)objcopy
-GO       = go
+# Android NDK 配置
+NDK       ?= $(HOME)/Library/Android/sdk/ndk/21.1.6352462
+TOOLCHAIN  = $(NDK)/toolchains/llvm/prebuilt/darwin-x86_64
+API        = 21
+
+# 交叉编译工具链 (使用 NDK 的 clang)
+CC         = $(TOOLCHAIN)/bin/aarch64-linux-android$(API)-clang
+LD         = $(TOOLCHAIN)/bin/aarch64-linux-android-ld
+OBJCOPY    = $(TOOLCHAIN)/bin/aarch64-linux-android-objcopy
+NM         = $(TOOLCHAIN)/bin/aarch64-linux-android-nm
+GO         = go
 
 # 目录
 STUB_DIR   = stub
@@ -29,7 +35,7 @@ STUB_ELF   = $(BUILD_DIR)/stub/vm_interp.elf
 STUB_BIN   = $(CMD_DIR)/vm_interp.bin
 
 # ------ Go packer ------
-PACKER     = $(BUILD_DIR)/vmpacker.exe
+PACKER     = $(BUILD_DIR)/vmpacker
 
 # ------ Demo ------
 DEMO_LICENSE     = $(BUILD_DIR)/demo_license
@@ -43,7 +49,7 @@ STUB_CFLAGS = -c -Os -mcmodel=tiny -fno-stack-protector \
 DEMO_CFLAGS = -static -O0 -march=armv8-a
 
 # ============================================================
-.PHONY: all stub packer demo test clean help gui sync-public
+.PHONY: all stub packer demo test clean help
 
 all: stub packer
 	@echo ""
@@ -53,47 +59,54 @@ all: stub packer
 stub: $(STUB_BIN)
 
 $(STUB_O): $(STUB_SRC) | $(BUILD_DIR)/stub
-	$(CC) $(STUB_CFLAGS) $< -o $@
+	$(CC) $(STUB_CFLAGS) -o $@ $<
 
 $(STUB_ELF): $(STUB_O) $(STUB_LDS)
-	$(LD) -T $(STUB_LDS) -o $@ $(STUB_O)
+	$(LD) -T $(STUB_LDS) -o $@ $<
 
 $(STUB_BIN): $(STUB_ELF) | $(BUILD_DIR)
 	$(OBJCOPY) -O binary $< $(BUILD_DIR)/vm_interp_raw.bin
-	@powershell -Command "\
-		$$nmOut = & '$(CROSS)nm' '$<';\
-		$$l1 = $$nmOut | Select-String '\bvm_entry$$';\
-		$$l2 = $$nmOut | Select-String '\bvm_entry_token$$';\
-		$$l3 = $$nmOut | Select-String '\b_token_table_va$$';\
-		if (!$$l1) { Write-Error 'vm_entry not found'; exit 1 };\
-		if (!$$l2) { Write-Error 'vm_entry_token not found'; exit 1 };\
-		if (!$$l3) { Write-Error '_token_table_va not found'; exit 1 };\
-		$$off1 = [Convert]::ToUInt64($$l1.ToString().Split(' ')[0], 16);\
-		$$off2 = [Convert]::ToUInt64($$l2.ToString().Split(' ')[0], 16);\
-		$$off3 = [Convert]::ToUInt64($$l3.ToString().Split(' ')[0], 16);\
-		$$hdr = [BitConverter]::GetBytes([UInt64]$$off1) + [BitConverter]::GetBytes([UInt64]$$off2) + [BitConverter]::GetBytes([UInt64]$$off3);\
-		$$raw = [IO.File]::ReadAllBytes('$(BUILD_DIR)/vm_interp_raw.bin');\
-		$$blob = $$hdr + $$raw;\
-		[IO.File]::WriteAllBytes('$(STUB_BIN)', $$blob);\
-		Write-Host ('[+] vm_interp.bin: ' + $$blob.Length + ' bytes (vm_entry=0x' + $$off1.ToString('X') + ' vm_entry_token=0x' + $$off2.ToString('X') + ' _token_table_va=0x' + $$off3.ToString('X') + ')')\
-	"
-	@copy /Y "$(subst /,\,$(STUB_BIN))" "$(subst /,\,$(BUILD_DIR))\vm_interp.bin" > nul
+	@echo "Extracting symbol offsets..."
+	@OFF1=$$($(NM) $< | grep '\bvm_entry$$' | awk '{print $$1}'); \
+	OFF2=$$($(NM) $< | grep '\bvm_entry_token$$' | awk '{print $$1}'); \
+	OFF3=$$($(NM) $< | grep '\b_token_table_va$$' | awk '{print $$1}'); \
+	if [ -z "$$OFF1" ]; then echo "Error: vm_entry not found"; exit 1; fi; \
+	if [ -z "$$OFF2" ]; then echo "Error: vm_entry_token not found"; exit 1; fi; \
+	if [ -z "$$OFF3" ]; then echo "Error: _token_table_va not found"; exit 1; fi; \
+	echo "  vm_entry=0x$$OFF1 vm_entry_token=0x$$OFF2 _token_table_va=0x$$OFF3"; \
+	perl -e 'print pack("Q<", hex($$ARGV[0]))' "0x$$OFF1" > $(BUILD_DIR)/off1.bin; \
+	perl -e 'print pack("Q<", hex($$ARGV[0]))' "0x$$OFF2" > $(BUILD_DIR)/off2.bin; \
+	perl -e 'print pack("Q<", hex($$ARGV[0]))' "0x$$OFF3" > $(BUILD_DIR)/off3.bin; \
+	cat $(BUILD_DIR)/off1.bin $(BUILD_DIR)/off2.bin $(BUILD_DIR)/off3.bin $(BUILD_DIR)/vm_interp_raw.bin > $@; \
+	rm -f $(BUILD_DIR)/off1.bin $(BUILD_DIR)/off2.bin $(BUILD_DIR)/off3.bin; \
+	echo "[+] vm_interp.bin: $$(stat -f%z $@) bytes (vm_entry=0x$$OFF1 vm_entry_token=0x$$OFF2 _token_table_va=0x$$OFF3)"
+	@cp $@ $(BUILD_DIR)/vm_interp.bin
 
 # ------ Go packer (embed vm_interp.bin) ------
 packer: $(STUB_BIN) | $(BUILD_DIR)
-	@powershell -Command "if (Test-Path '$(PACKER)') { Remove-Item -Force '$(PACKER)' -ErrorAction SilentlyContinue }"
+	@rm -f $(PACKER)
 	$(GO) build -o $(PACKER) ./$(CMD_DIR)/
 	@echo "[+] packer: $(PACKER)"
 
+# ------ GUI 版本 (Wails + NSIS) ------
+GUI_DIR = vmp-gui
+
+gui: stub
+	@cp -f "$(STUB_BIN)" "$(GUI_DIR)/backend/api/vm_interp.bin"
+	@cd "$(GUI_DIR)" && \
+		echo "Building for current platform..." && \
+		~/go/bin/wails build
+	@echo "[+] GUI built for current platform"
+	
 # ------ Demo 程序 ------
 demo: $(DEMO_LICENSE) $(DEMO_SIMPLE)
 
 $(DEMO_LICENSE): $(DEMO_DIR)/demo_license.c | $(BUILD_DIR)
-	$(CC) $(DEMO_CFLAGS) $< -o $@
+	$(CC) $(DEMO_CFLAGS) -o $@ $<
 	@echo "[+] demo: $@"
 
 $(DEMO_SIMPLE): $(DEMO_DIR)/demo_simple.c | $(BUILD_DIR)
-	$(CC) -static -O1 -nostdlib -march=armv8-a $< -o $@
+	$(CC) -static -O1 -nostdlib -march=armv8-a -o $@ $<
 	@echo "[+] demo: $@"
 
 # ------ 测试 ------
@@ -102,14 +115,14 @@ test:
 
 # ------ 目录创建 ------
 $(BUILD_DIR):
-	@powershell -Command "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)' | Out-Null"
+	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/stub: | $(BUILD_DIR)
-	@powershell -Command "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)/stub' | Out-Null"
+	mkdir -p $(BUILD_DIR)/stub
 
 # ------ 清理 ------
 clean:
-	@powershell -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '$(BUILD_DIR)', '$(STUB_BIN)'"
+	rm -rf $(BUILD_DIR) $(STUB_BIN)
 	@echo "[+] cleaned"
 
 # ------ 帮助 ------
@@ -117,21 +130,7 @@ help:
 	@echo "make all     - 编译 stub + packer (输出到 build/)"
 	@echo "make stub    - 仅编译 VM 解释器 blob"
 	@echo "make packer  - 编译 Go packer (自动嵌入 blob)"
-	@echo "make gui     - 编译 GUI 版本 + NSIS 安装包"
+	@echo "make gui     - 编译 GUI 版本"
 	@echo "make demo    - 交叉编译 demo 程序"
 	@echo "make test    - 运行单元测试"
-	@echo "make clean        - 清理所有产物"
-	@echo "make sync-public  - 同步到公开仓库 (vmpack remote)"
-
-# ------ GUI 版本 (Wails + NSIS) ------
-GUI_DIR = vmp-gui
-
-gui: stub
-	@copy /Y "$(subst /,\,$(STUB_BIN))" "$(subst /,\,$(GUI_DIR))\backend\api\vm_interp.bin" > nul
-	@powershell -Command "$$env:PATH = 'C:\Program Files (x86)\NSIS;' + $$env:PATH; cd '$(GUI_DIR)'; wails build -nsis"
-	@echo "[+] GUI installer: $(GUI_DIR)/build/bin/"
-
-# ------ 同步公开仓库 ------
-sync-public:
-	@powershell -ExecutionPolicy Bypass -File sync-public.ps1
-
+	@echo "make clean   - 清理所有产物"

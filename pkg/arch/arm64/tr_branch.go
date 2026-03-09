@@ -71,9 +71,18 @@ func (t *Translator) trBranchCond(inst vm.Instruction) error {
 
 func (t *Translator) trBL(inst vm.Instruction) error {
 	target := uint64(int64(t.funcAddr) + int64(inst.Offset) + inst.Imm)
+	off := t.pos()
+	t.emit(vm.OpMovImm, 15)
+	t.emitU64(0)
+	t.emit(vm.OpCallReg, 15)
 
-	t.emit(vm.OpCallNative)
-	t.emitU64(target)
+	reloc := Relocation{
+		BcOffset:   uint64(off),
+		TargetAddr: target,
+		IsInternal: true, // 同一个 .so 内
+		FuncName:   t.currentFuncName,
+	}
+	t.relocations = append(t.relocations, reloc)
 	return nil
 }
 

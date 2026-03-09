@@ -6,6 +6,7 @@ import (
 	"debug/elf"
 	"encoding/binary"
 	"fmt"
+	"path/filepath"
 
 	"os"
 	"sort"
@@ -33,6 +34,13 @@ type AddrSpec struct {
 	Addr uint64
 	End  uint64 // 0 = 自动检测
 	Name string // 可选名称
+}
+
+// 收集所有需要运行时重定位信息
+type RuntimeReloc struct {
+	WritePos uint64 // 相对于 bc 的偏移（待重定位数据的地址在最终字节码中的偏移）
+	Offset   uint64 // 相对偏移 （需要加上运行时基地址，完成重定位
+	FuncId   uint64 // 标记此重定位信息属于哪个函数的（函数id
 }
 
 // ParseAddrSpec 解析地址规格: "0xADDR", "0xSTART-0xEND", "0xSTART-0xEND:name"
@@ -79,6 +87,7 @@ func ParseAddrSpec(s string) (AddrSpec, error) {
 type Packer struct {
 	inputPath    string
 	outputPath   string
+	soName       string
 	funcNames    []string
 	addrSpecs    []AddrSpec
 	verbose      bool
@@ -87,13 +96,15 @@ type Packer struct {
 	tokenEntry   bool // Token 化入口模式
 	data         []byte
 	interpBlob   []byte
+	relocations  []arm64.Relocation // 收集所有重定位
 }
 
 // FuncBytecode 保存单个函数的加密字节码和元信息
 type FuncBytecode struct {
-	FI        *vm.FuncInfo
-	Encrypted []byte
-	XorKey    byte
+	FI               *vm.FuncInfo
+	Encrypted        []byte
+	XorKey           byte
+	reverseOffsetMap map[int]int // 反转后 offset 映射 (原 offset → 新 offset)
 }
 
 // NewPacker 创建 ELF 打包器
@@ -114,6 +125,9 @@ func NewPacker(input, output string, funcs []string, addrSpecs []AddrSpec, verbo
 // FindFunction 在 ELF 中查找函数
 func (p *Packer) FindFunction(f *elf.File, name string) (*vm.FuncInfo, error) {
 	syms, err := f.Symbols()
+	if err != nil {
+		syms, err = f.DynamicSymbols()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reading symbol table failed: %v", err)
 	}
@@ -296,7 +310,10 @@ func (p *Packer) Process() error {
 		return fmt.Errorf("64-bit ELF only")
 	}
 
-	fmt.Printf("[*] ELF: %s, Type: %s\n", f.Machine, f.Type)
+	// 获取 so name
+	p.soName = filepath.Base(p.inputPath)
+
+	fmt.Printf("[*] ELF: %s, Type: %s, Name: %s\n", f.Machine, f.Type, p.soName)
 	fmt.Printf("[*] VM interp blob: %d bytes\n", len(p.interpBlob))
 
 	dec := arm64.NewDecoder()
@@ -348,7 +365,7 @@ func (p *Packer) Process() error {
 			fmt.Println("    --- End ---")
 		}
 
-		trans := arm64.NewTranslator(fi.Addr, int(fi.Size))
+		trans := arm64.NewTranslator(fi.Addr, int(fi.Size), fi.Name)
 		if p.debug {
 			trans.SetDebug(true)
 		}
@@ -443,6 +460,11 @@ func (p *Packer) Process() error {
 			}
 		}
 
+		// 收集重定位信息
+		if len(result.Relocations) > 0 {
+			p.relocations = append(p.relocations, result.Relocations...)
+		}
+
 		// ---- PC 反向遍历: 反转指令顺序 ----
 		// 必须在 OpcodeCryptor 之前执行 (加密使用最终 pc 位置)
 		reversed, offsetMap := reverseInstructions(result.Bytecode, result.CodeLen)
@@ -508,7 +530,7 @@ func (p *Packer) Process() error {
 			encrypted[i] = b ^ xorKey
 		}
 
-		funcs = append(funcs, FuncBytecode{FI: fi, Encrypted: encrypted, XorKey: xorKey})
+		funcs = append(funcs, FuncBytecode{FI: fi, Encrypted: encrypted, XorKey: xorKey, reverseOffsetMap: offsetMap})
 	}
 
 	// 第二阶段: 批量注入 (一次 PT_NOTE 劫持)
@@ -830,6 +852,13 @@ func (p *Packer) injectVMPBatch(funcs []FuncBytecode) error {
 		for len(payload)%8 != 0 {
 			payload = append(payload, 0x00)
 		}
+
+		// 获取 函数num == token_desc_t num，写入 token_desc_t num (8 bytes)，后续紧跟 token_desc_t 表
+		var desc_num [8]byte
+		funcs_num := len(funcs)
+		binary.LittleEndian.PutUint64(desc_num[0:], (uint64)(funcs_num))
+		payload = append(payload, desc_num[:]...)
+
 		tokenTableOff := len(payload)
 		tokenTableVA := payloadVA + uint64(tokenTableOff)
 
@@ -845,6 +874,50 @@ func (p *Packer) injectVMPBatch(funcs []FuncBytecode) error {
 			binary.LittleEndian.PutUint32(desc[8:], bcLen)
 			binary.LittleEndian.PutUint32(desc[12:], 0) // reserved
 			payload = append(payload, desc[:]...)
+		}
+
+		// 写入 so name信息（在 token_desc_t 表后面）供运行时获取so基地址
+		// [so_name_len][so_name][0]
+		soNameLen := len(p.soName)
+		payload = append(payload, byte(soNameLen))
+		payload = append(payload, []byte(p.soName)...)
+		payload = append(payload, 0)
+
+		// 添加自定义重定位表（处理重定位信息，供运行时修复）
+		if len(p.relocations) > 0 {
+			fmt.Printf("    [RELOC] Processing %d relocations...\n", len(p.relocations))
+
+			var runtimeRelocs []RuntimeReloc
+
+			// 处理重定位
+			for i, fb := range funcs {
+				// 获取每一个函数的所有重定位信息
+				funcRelocs := p.getRelocationsForFunc(fb.FI.Name)
+				for _, reloc := range funcRelocs {
+					// 处理每一条重定位信息
+					// 通过原始偏移得到反转后的偏移
+					reOff := (uint64)(fb.reverseOffsetMap[(int)(reloc.BcOffset)])
+					// 反转后的偏移指向当前指令末尾，因为每条指令多了 1B size 标记，待重定位指令最后8b 为操作数（待重定位地址）
+					// 所以 待重定位地址当前在 byteCode 中的偏移为 reOff - 1 - 8
+					writePos := reOff - 9
+
+					fmt.Printf("    [RELOC] reloc.Offset : %d,  new reloc.Offset : %d\n", reloc.BcOffset, writePos)
+					// .so 中地址是相对的，需要运行时加上基址
+					// 记录需要运行时加基址
+					runtimeRelocs = append(runtimeRelocs, RuntimeReloc{
+						WritePos: writePos,
+						Offset:   reloc.TargetAddr,
+						FuncId:   (uint64)(i),
+					})
+				}
+			}
+
+			// 将运行时重定位表附加到 so_name_info 后面
+			table := p.appendRuntimeRelocTable(runtimeRelocs)
+			payload = append(payload, table...)
+
+			fmt.Printf("\n重定位表总大小: %d 字节\n", len(table))
+			fmt.Printf("=====================================\n")
 		}
 
 		// 更新 PT_LOAD 段大小 (payload 增长了)
@@ -934,6 +1007,58 @@ func (p *Packer) injectVMPBatch(funcs []FuncBytecode) error {
 	STANDARD_MODE_DISABLED */
 
 	return nil
+}
+
+func (p *Packer) getRelocationsForFunc(funcName string) []arm64.Relocation {
+	var result []arm64.Relocation
+	for _, r := range p.relocations {
+		if r.FuncName == funcName {
+			result = append(result, r)
+		}
+	}
+	return result
+}
+
+// 生成运行时重定位表
+func (p *Packer) appendRuntimeRelocTable(relocs []RuntimeReloc) []byte {
+	// 格式: [magic:4][count:4][entries...]
+	// entry: [func_id:8][write_pos:8][offset:8]
+	fmt.Printf("\n========== 生成运行时重定位表 ==========\n")
+	fmt.Printf("重定位条目数量: %d\n", len(relocs))
+
+	table := []byte{}
+
+	// 魔数 "RTLR" (Runtime ReLoc)
+	table = append(table, []byte{'R', 'T', 'L', 'R'}...)
+	fmt.Printf("魔数: RTLR (0x524C5452)\n")
+
+	// 数量
+	countBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(countBuf, uint32(len(relocs)))
+	table = append(table, countBuf...)
+	fmt.Printf("条目数量: %d (0x%X)\n", len(relocs), len(relocs))
+
+	fmt.Printf("\n重定位条目详情:\n")
+	for i, reloc := range relocs {
+		// 函数 id
+		funcIdBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(funcIdBuf, reloc.FuncId)
+		table = append(table, funcIdBuf...)
+		// 写入位置
+		posBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(posBuf, reloc.WritePos)
+		table = append(table, posBuf...)
+		// 偏移
+		offBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(offBuf, reloc.Offset)
+		table = append(table, offBuf...)
+		fmt.Printf("      函数id: %d\n", reloc.FuncId)
+		fmt.Printf("  [%d] 写入位置: 0x%X\n", i, reloc.WritePos)
+		fmt.Printf("      偏移: 0x%X\n", reloc.Offset)
+		fmt.Printf("      偏移(hex): % X\n", offBuf)
+	}
+
+	return table
 }
 
 // PrintELFInfo 打印 ELF 信息

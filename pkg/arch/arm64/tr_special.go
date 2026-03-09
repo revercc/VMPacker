@@ -1,8 +1,6 @@
 package arm64
 
 import (
-	
-
 	"github.com/vmpacker/pkg/vm"
 )
 
@@ -20,19 +18,36 @@ func (t *Translator) trADRP(instructions []vm.Instruction, idx int) (int, error)
 	pc := t.funcAddr + uint64(inst.Offset)
 	pageBase := pc &^ 0xFFF
 	adrpResult := pageBase + uint64(inst.Imm)
+	off := t.pos()
 
 	if idx+1 < len(instructions) {
 		next := instructions[idx+1]
 		if Op(next.Op) == ADD_IMM && next.Rd == inst.Rd && next.Rn == inst.Rd {
 			finalAddr := adrpResult + uint64(next.Imm)
 			t.emit(vm.OpMovImm, rd)
-			t.emitU64(finalAddr)
+			t.emitU64(0)
+			// 记录重定位信息
+			reloc := Relocation{
+				BcOffset:   uint64(off),
+				TargetAddr: finalAddr,
+				IsInternal: true,
+				FuncName:   t.currentFuncName,
+			}
+			t.relocations = append(t.relocations, reloc)
 			return 1, nil
 		}
 	}
 
 	t.emit(vm.OpMovImm, rd)
-	t.emitU64(adrpResult)
+	t.emitU64(0)
+	// 记录重定位信息
+	reloc := Relocation{
+		BcOffset:   uint64(off),
+		TargetAddr: adrpResult,
+		IsInternal: true,
+		FuncName:   t.currentFuncName,
+	}
+	t.relocations = append(t.relocations, reloc)
 	return 0, nil
 }
 
@@ -43,8 +58,18 @@ func (t *Translator) trADR(inst vm.Instruction) (int, error) {
 	}
 	pc := t.funcAddr + uint64(inst.Offset)
 	addr := pc + uint64(inst.Imm)
+	off := t.pos()
 	t.emit(vm.OpMovImm, rd)
-	t.emitU64(addr)
+	t.emitU64(0)
+
+	// 记录重定位信息
+	reloc := Relocation{
+		BcOffset:   uint64(off),
+		TargetAddr: addr,
+		IsInternal: true,
+		FuncName:   t.currentFuncName,
+	}
+	t.relocations = append(t.relocations, reloc)
 	return 0, nil
 }
 
