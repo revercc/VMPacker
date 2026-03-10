@@ -18,7 +18,7 @@ func (t *Translator) trADRP(instructions []vm.Instruction, idx int) (int, error)
 	pc := t.funcAddr + uint64(inst.Offset)
 	pageBase := pc &^ 0xFFF
 	adrpResult := pageBase + uint64(inst.Imm)
-	off := t.pos()
+	fixPos := t.pos()
 
 	if idx+1 < len(instructions) {
 		next := instructions[idx+1]
@@ -28,7 +28,7 @@ func (t *Translator) trADRP(instructions []vm.Instruction, idx int) (int, error)
 			t.emitU64(0)
 			// 记录重定位信息
 			reloc := Relocation{
-				BcOffset:   uint64(off),
+				BcOffset:   uint64(fixPos),
 				TargetAddr: finalAddr,
 				IsInternal: true,
 				FuncName:   t.currentFuncName,
@@ -42,7 +42,7 @@ func (t *Translator) trADRP(instructions []vm.Instruction, idx int) (int, error)
 	t.emitU64(0)
 	// 记录重定位信息
 	reloc := Relocation{
-		BcOffset:   uint64(off),
+		BcOffset:   uint64(fixPos),
 		TargetAddr: adrpResult,
 		IsInternal: true,
 		FuncName:   t.currentFuncName,
@@ -58,13 +58,13 @@ func (t *Translator) trADR(inst vm.Instruction) (int, error) {
 	}
 	pc := t.funcAddr + uint64(inst.Offset)
 	addr := pc + uint64(inst.Imm)
-	off := t.pos()
+	fixPos := t.pos()
 	t.emit(vm.OpMovImm, rd)
 	t.emitU64(0)
 
 	// 记录重定位信息
 	reloc := Relocation{
-		BcOffset:   uint64(off),
+		BcOffset:   uint64(fixPos),
 		TargetAddr: addr,
 		IsInternal: true,
 		FuncName:   t.currentFuncName,
