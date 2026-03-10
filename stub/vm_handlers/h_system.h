@@ -118,6 +118,9 @@ static inline u32 h_svc(vm_ctx_t *vm) {
  * 支持的系统寄存器:
  *   0x5F02 = cntvct_el0 (timer count)
  *   0x5F00 = cntfrq_el0 (timer frequency)
+ *   0x5E82 = TPIDR_EL0   (Software Thread ID)
+ *   0x5E83 = TPIDRRO_EL0 (Read-only Software Thread ID)
+ *   0x5A10 = NZCV        (标志位寄存器)
  */
 static inline u32 h_mrs(vm_ctx_t *vm) {
   u8 d = vm->bc[vm->pc + 1];
@@ -129,6 +132,18 @@ static inline u32 h_mrs(vm_ctx_t *vm) {
     break;
   case 0x5F00: /* cntfrq_el0 */
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(val));
+    break;
+  case 0x5E82: /* TPIDR_EL0 - Software Thread ID */
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(val));
+    break;  
+  case 0x5E83: /* TPIDRRO_EL0 - Read-only Software Thread ID */
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(val));
+    break;
+  case 0x5A10: /* NZCV - 标志位寄存器 */
+      val = ((vm->FL & FL_ZERO) ? 0x4 : 0)   /* Z bit (bit 2) */
+          | ((vm->FL & FL_SIGN) ? 0x8 : 0)   /* N bit (bit 3) */
+          | (!(vm->FL & FL_CARRY) ? 0x2 : 0); /* C bit (bit 1), 注意: 我们的 FL_CARRY = 无符号小于, ARM C 是反向的 */
+      val = val << 28; /* NZCV 在高 4 位 */
     break;
   default:
     /* 不支持的系统寄存器，返回 0 */
