@@ -602,6 +602,12 @@ func (t *Translator) translateOne(instructions []vm.Instruction, idx int) (int, 
 	case HLT, BRK:
 		t.emit(vm.OpHalt)
 		return 0, nil
+	case PACIASP, AUTIASP, PACIAZ, AUTIAZ, PACIBSP, AUTIBSP, XPACLRI:
+		t.emit(vm.OpNop)
+		return 0, nil
+	case BTI_C, BTI_J, BTI_JC, BTI:
+		t.emit(vm.OpNop)
+		return 0, nil
 
 	// ========== Acquire/Release (Batch 5) ==========
 	case LDAR, LDAXR:

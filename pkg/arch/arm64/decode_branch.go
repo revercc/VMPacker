@@ -157,4 +157,121 @@ var branchPatterns = []InstrPattern{
 	// ---- Exception generation: HLT/BRK ----
 	{Name: "HLT", Mask: 0xFFE0001F, Value: 0xD4400000, Op: HLT},
 	{Name: "BRK", Mask: 0xFFE0001F, Value: 0xD4200000, Op: BRK},
+
+	// ---- PACIASP - 对 LR 使用 SP 作为修饰符进行签名 ----
+	// 编码: 1101_0101_0000_0011_0010_0011_1111_1111
+	// 实际上这是 HINT #32 的特殊形式
+	{
+		Name:   "PACIASP",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD503237F, // HINT #32, 在支持 PAC 的 CPU 上是 PACIASP
+		Op:     PACIASP,
+		Fields: []FieldDef{}, // 无字段
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			// PACIASP 不涉及立即数或寄存器操作数
+			inst.Imm = 0
+		},
+	},
+
+	// ---- AUTIASP - 验证并还原 LR ----
+	// 编码: 1101_0101_0000_0011_0010_0011_1011_1111
+	{
+		Name:   "AUTIASP",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD50323BF, // HINT #46, 在支持 PAC 的 CPU 上是 AUTIASP
+		Op:     AUTIASP,
+		Fields: []FieldDef{},
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			inst.Imm = 0
+		},
+	},
+
+	// ---- PACIAZ - 使用零作为修饰符对 LR 签名 ----
+	{
+		Name:  "PACIAZ",
+		Mask:  0xFFFFFFFF,
+		Value: 0xD503233F, // HINT #38
+		Op:    PACIAZ,
+	},
+
+	// ---- AUTIAZ - 使用零作为修饰符验证 LR ----
+	{
+		Name:  "AUTIAZ",
+		Mask:  0xFFFFFFFF,
+		Value: 0xD50323FF, // HINT #63
+		Op:    AUTIAZ,
+	},
+
+	// ---- PACIBSP - 使用 SP 作为修饰符对 LR 签名 (使用 B 密钥) ----
+	{
+		Name:  "PACIBSP",
+		Mask:  0xFFFFFFFF,
+		Value: 0xD50327FF, // HINT #31 的某种形式
+		Op:    PACIBSP,
+	},
+
+	// ---- AUTIBSP - 使用 SP 作为修饰符验证 LR (使用 B 密钥) ----
+	{
+		Name:  "AUTIBSP",
+		Mask:  0xFFFFFFFF,
+		Value: 0xD50327BF, // HINT #47
+		Op:    AUTIBSP,
+	},
+
+	// ---- XPACLRI - 清除 PAC 签名 ----
+	{
+		Name:  "XPACLRI",
+		Mask:  0xFFFFFFFF,
+		Value: 0xD50320FF, // HINT #7
+		Op:    XPACLRI,
+	},
+
+	// BTI (Branch Target Identification) 指令
+	// ---- BTI C - 接受 CALL 类型跳转 ----
+	{
+		Name:   "BTI C",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD503245F, // HINT #36
+		Op:     BTI_C,
+		Fields: []FieldDef{},
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			inst.Imm = 36 // hint number
+		},
+	},
+
+	// ---- BTI J - 接受 JUMP 类型跳转 ----
+	{
+		Name:   "BTI J",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD503255F, // HINT #44
+		Op:     BTI_J,
+		Fields: []FieldDef{},
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			inst.Imm = 44
+		},
+	},
+
+	// ---- BTI JC - 接受两者 ----
+	{
+		Name:   "BTI JC",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD503265F, // HINT #50
+		Op:     BTI_JC,
+		Fields: []FieldDef{},
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			inst.Imm = 50
+		},
+	},
+
+	// ---- BTI (默认 = BTI JC) ----
+	{
+		Name:   "BTI",
+		Mask:   0xFFFFFFFF,
+		Value:  0xD503275F, // HINT #62
+		Op:     BTI,
+		Fields: []FieldDef{},
+		Post: func(f map[string]int64, inst *vm.Instruction) {
+			inst.Imm = 62
+		},
+	},
 }
