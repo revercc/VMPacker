@@ -113,9 +113,16 @@ func (t *Translator) trStackAluRegFlags(inst vm.Instruction, sOp byte, setFlags 
 	t.emit(sOp)
 
 	if setFlags {
-		t.sDup()          // duplicate result for CMP
-		t.sPushImm32(0)   // push 0
-		t.emit(vm.OpSCmp) // compare result with 0 → set flags
+		if sOp == vm.OpSSub || sOp == vm.OpSSbc {
+			// SUBS, SBCS: 需要原始值设置标志位
+			t.pushRegOrZero(inst.Rn, rn)
+			t.pushRegOrZero(inst.Rm, rm)
+			t.emit(vm.OpSCmp)
+		} else {
+			t.sDup()          // duplicate result for CMP
+			t.sPushImm32(0)   // push 0
+			t.emit(vm.OpSCmp) // compare result with 0 → set flags
+		}
 	}
 
 	if !inst.SF {
@@ -153,9 +160,16 @@ func (t *Translator) trStackAluImmFlags(inst vm.Instruction, sOp byte, setFlags 
 	t.emit(sOp)
 
 	if setFlags {
-		t.sDup()
-		t.sPushImm32(0)
-		t.emit(vm.OpSCmp)
+		if sOp == vm.OpSSub || sOp == vm.OpSSbc {
+			// SUBS, SBCS: 需要原始值设置标志位
+			t.pushRegOrZero(inst.Rn, rn)
+			t.sPushImm(uint64(inst.Imm))
+			t.emit(vm.OpSCmp)
+		} else {
+			t.sDup()
+			t.sPushImm32(0)
+			t.emit(vm.OpSCmp)
+		}
 	}
 
 	if !inst.SF {
