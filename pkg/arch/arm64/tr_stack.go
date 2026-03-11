@@ -1714,6 +1714,11 @@ func (t *Translator) trStackEXTR(inst vm.Instruction) error {
 		// ROR alias: 栈模式
 		t.sVload(rn)
 		t.sPushImm32(lsb)
+		if inst.SF {
+			t.sPushImm32(64) // 压入位数标记
+		} else {
+			t.sPushImm32(32) // 压入位数标记
+		}
 		t.emit(vm.OpSRor)
 	} else {
 		// General EXTR: (Rm >> lsb) | (Rn << (regSize-lsb))
