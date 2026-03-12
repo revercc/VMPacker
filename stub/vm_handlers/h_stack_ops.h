@@ -144,17 +144,9 @@ static inline u32 h_s_asr(vm_ctx_t *vm) {
 }
 
 static inline u32 h_s_ror(vm_ctx_t *vm) {
-    u64 bits = SPOP(vm);       // 先 pop 位数标记 (32或64)
-    u64 shift = SPOP(vm);      // 先 pop 移位量
-    u64 val = SPOP(vm);        // 再 pop 要旋转的值
-  
-    shift &= (bits - 1);
-    // val &= 0xFFFFFFFF;
-    if (shift == 0) {
-        SPUSH(vm, val);
-    } else {
-        SPUSH(vm, (val >> shift) | (val << (bits - shift)));
-    }
+    u64 bits = SPOP(vm), b = SPOP(vm), a = SPOP(vm);
+    b &= (bits - 1);
+    SPUSH(vm, b == 0 ? a : (a >> b) | (a << (bits - b))); 
     return 1;
 }
 

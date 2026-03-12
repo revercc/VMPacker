@@ -80,6 +80,14 @@ func (t *Translator) trStackAluReg(inst vm.Instruction, sOp byte) error {
 		t.pushRegOrZero(inst.Rm, rm)
 	}
 
+	if sOp == vm.OpSRor {
+		if inst.SF {
+			t.sPushImm32(64)
+		} else {
+			t.sPushImm32(32)
+		}
+	}
+
 	t.emit(sOp) // 二元操作
 
 	if !inst.SF {
@@ -791,6 +799,7 @@ func (t *Translator) emitShiftOnStack(shiftType int, amount uint32, sf bool) {
 			}
 		} else {
 			t.sPushImm32(amount)
+			t.sPushImm32(64)
 			t.emit(vm.OpSRor)
 		}
 	}
@@ -1714,11 +1723,7 @@ func (t *Translator) trStackEXTR(inst vm.Instruction) error {
 		// ROR alias: 栈模式
 		t.sVload(rn)
 		t.sPushImm32(lsb)
-		if inst.SF {
-			t.sPushImm32(64) // 压入位数标记
-		} else {
-			t.sPushImm32(32) // 压入位数标记
-		}
+		t.sPushImm32(regSize) // 压入位数标记
 		t.emit(vm.OpSRor)
 	} else {
 		// General EXTR: (Rm >> lsb) | (Rn << (regSize-lsb))
