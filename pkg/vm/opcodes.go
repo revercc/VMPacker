@@ -178,6 +178,10 @@ const (
 	OpSSt16 byte = 0x95 // pop val,addr → st16      1B
 	OpSSt32 byte = 0x96 // pop val,addr → st32      1B
 	OpSSt64 byte = 0x97 // pop val,addr → st64      1B
+
+	// 栈设置flags
+	OpSAdSetflags byte = 0x98 // pop bits,hasCarry,b,a,result → set flags 1B
+	OpSSuSetflags byte = 0x99 // pop bits,hasCarry,b,a,result → set flags 1B
 )
 
 // 标志位

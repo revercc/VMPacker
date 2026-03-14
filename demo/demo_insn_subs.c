@@ -43,7 +43,7 @@ __attribute__((noinline)) void test_subs_zero(void) {
     
     printf("10 - 10 = %d, flags=0x%08x, ZF=%d, CF=%d, NF=%d\n", 
            result, flags, zf, cf, nf);
-    // 应该: ZF=1, CF=0, NF=0
+    // 应该: ZF=1, CF=1, NF=0
 }
 
 __attribute__((noinline)) void test_subs_negative(void) {
@@ -68,7 +68,7 @@ __attribute__((noinline)) void test_subs_negative(void) {
     
     printf("5 - 10 = %d, flags=0x%08x, ZF=%d, CF=%d, NF=%d\n", 
            result, flags, zf, cf, nf);
-    // 应该: ZF=0, CF=1, NF=1
+    // 应该: ZF=0, CF=0, NF=1
 }
 
 __attribute__((noinline)) void test_sbcs(void) {
@@ -87,10 +87,10 @@ __attribute__((noinline)) void test_sbcs(void) {
         "mov x4, #1\n"               // 低64位 = 1
         
         // 低64位减法
-        "subs x5, x2, x4\n"          // 0 - 1 = -1, 设置借位
+        "subs x5, x2, x4\n"          // 0 - 1 = -1, 设置 CF=0
         
         // 高64位带借位减法
-        "sbcs x6, x1, x3\n"          // 1 - 0 - 1 = 0
+        "sbcs x6, x1, x3\n"          // 1 - 0 - (1 - CF) = 0, 设置 CF=1
         
         // 现在检查整个128位结果是否为0
         "orr %x[tmp], x5, x6\n"      // 合并高低64位
@@ -122,10 +122,10 @@ __attribute__((noinline)) void test_sbcs_with_branch(void) {
         "mov x1, #5\n"
         "mov x2, #10\n"
         
-        // 第一次减法: 5 - 10 = -5, 设置 CF=1
+        // 第一次减法: 5 - 10 = -5, 设置 CF=0
         "subs x3, x1, x2\n"
         
-        // 第二次带借位减法: -5 - 2 - 1 = -8
+        // 第二次带借位减法: -5 - 2 - (1 - CF) = -8, 设置 CF=1
         "mov x4, #2\n"
         "sbcs x5, x3, x4\n"
         

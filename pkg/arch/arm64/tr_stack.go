@@ -121,15 +121,36 @@ func (t *Translator) trStackAluRegFlags(inst vm.Instruction, sOp byte, setFlags 
 	t.emit(sOp)
 
 	if setFlags {
-		if sOp == vm.OpSSub || sOp == vm.OpSSbc {
-			// SUBS, SBCS: 需要原始值设置标志位
+		if sOp == vm.OpSAdc || sOp == vm.OpSAdd {
+			t.sDup()
 			t.pushRegOrZero(inst.Rn, rn)
 			t.pushRegOrZero(inst.Rm, rm)
-			t.emit(vm.OpSCmp)
-		} else {
-			t.sDup()          // duplicate result for CMP
-			t.sPushImm32(0)   // push 0
-			t.emit(vm.OpSCmp) // compare result with 0 → set flags
+			if sOp == vm.OpSAdc {
+				t.sPushImm32(1) // carry-in for ADC
+			} else {
+				t.sPushImm32(0)
+			}
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSAdSetflags) // set flags for addition
+		} else if sOp == vm.OpSSbc || sOp == vm.OpSSub {
+			t.sDup()
+			t.pushRegOrZero(inst.Rn, rn)
+			t.pushRegOrZero(inst.Rm, rm)
+			if sOp == vm.OpSSbc {
+				t.sPushImm32(1) // carry-in for SBC
+			} else {
+				t.sPushImm32(0)
+			}
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSSuSetflags) // set flags for subtraction
 		}
 	}
 
@@ -168,11 +189,28 @@ func (t *Translator) trStackAluImmFlags(inst vm.Instruction, sOp byte, setFlags 
 	t.emit(sOp)
 
 	if setFlags {
-		if sOp == vm.OpSSub || sOp == vm.OpSSbc {
-			// SUBS, SBCS: 需要原始值设置标志位
+		if sOp == vm.OpSAdd {
+			t.sDup()
 			t.pushRegOrZero(inst.Rn, rn)
 			t.sPushImm(uint64(inst.Imm))
-			t.emit(vm.OpSCmp)
+			t.sPushImm32(0)
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSAdSetflags) // set flags for addition
+		} else if sOp == vm.OpSSub {
+			t.sDup()
+			t.pushRegOrZero(inst.Rn, rn)
+			t.sPushImm(uint64(inst.Imm))
+			t.sPushImm32(0)
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSSuSetflags) // set flags for subtraction
 		} else {
 			t.sDup()
 			t.sPushImm32(0)

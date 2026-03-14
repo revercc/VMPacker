@@ -179,14 +179,14 @@ static inline u32 h_s_sdiv(vm_ctx_t *vm) {
 
 static inline u32 h_s_adc(vm_ctx_t *vm) {
   u64 b = SPOP(vm), a = SPOP(vm);
-  u64 carry = (vm->FL & FL_CARRY) ? 1 : 0;
+  u64 carry = !(vm->FL & FL_CARRY) ? 1 : 0;
   SPUSH(vm, a + b + carry);
   return 1;
 }
 
 static inline u32 h_s_sbc(vm_ctx_t *vm) {
   u64 b = SPOP(vm), a = SPOP(vm);
-  u64 carry = (vm->FL & FL_CARRY) ? 1 : 0;
+  u64 carry = !(vm->FL & FL_CARRY) ? 1 : 0;
   SPUSH(vm, a - b - (1 - carry));
   return 1;
 }
@@ -282,6 +282,80 @@ static inline u32 h_s_cmp(vm_ctx_t *vm) {
   vm->FL = fl;
   return 1;
 }
+
+// 加法标志设置 (ADDS, ADCS)
+static inline u32 h_s_ad_setflags(vm_ctx_t *vm) {
+    u64 bits = SPOP(vm), hasCarry = SPOP(vm), b = SPOP(vm), a = SPOP(vm), result = SPOP(vm);
+    if(bits == 32) {
+        a &= 0xFFFFFFFF;
+        b &= 0xFFFFFFFF;
+        result &= 0xFFFFFFFF;
+    }
+
+    u64 carry = 0;
+    if(hasCarry){
+      carry = !(vm->FL & FL_CARRY) ? 1 : 0;
+    }
+
+    vm->FL = 0;
+    // Z: 结果为零
+    if (result == 0)
+        vm->FL |= FL_ZERO;
+    
+    // N: 结果的最高位（有符号负数）
+    if(bits == 32){
+      if ((i32)result < 0)
+        vm->FL |= FL_SIGN;
+    } else {
+      if ((i64)result < 0)
+        vm->FL |= FL_SIGN;
+    }
+    
+    // 是否有进位
+    unsigned __int128 full_result = a + b + carry;
+    if (!(full_result >> bits))
+      vm->FL |= FL_CARRY;
+
+    return 1;
+}
+
+
+// 减法标志设置 (SUBS, SBCS)
+static inline u32 h_s_su_setflags(vm_ctx_t *vm) {
+    u64 bits = SPOP(vm), hasCarry = SPOP(vm), b = SPOP(vm), a = SPOP(vm), result = SPOP(vm);
+    if(bits == 32) {
+        a &= 0xFFFFFFFF;
+        b &= 0xFFFFFFFF;
+        result &= 0xFFFFFFFF;
+    }
+
+    u64 borrow = 0;
+    if(hasCarry){
+      u64 carry = (!(vm->FL & FL_CARRY)) ? 1 : 0;
+      borrow = 1 - carry;
+    }
+    
+    vm->FL = 0;
+    // Z: 结果为零
+    if (result == 0)
+        vm->FL |= FL_ZERO;
+    
+    // N: 结果的最高位（有符号负数）
+    if(bits == 32){
+      if ((i32)result < 0)
+        vm->FL |= FL_SIGN;
+    } else {
+      if ((i64)result < 0)
+        vm->FL |= FL_SIGN;
+    }
+    
+    // 是否有借位
+    if (a < (b + borrow))
+      vm->FL |= FL_CARRY;
+
+    return 1;
+}
+
 
 /* ================================================================
  * 栈内存访问
