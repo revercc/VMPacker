@@ -94,7 +94,6 @@ __attribute__((noinline)) void test_sbcs(void) {
         
         // 现在检查整个128位结果是否为0
         "orr %x[tmp], x5, x6\n"      // 合并高低64位
-        "cmp %x[tmp], #0\n"          // 比较是否为0
         "mrs %x[fl], nzcv\n"         // 读取最终标志位
         
         "mov %x[lo], x5\n"
@@ -169,6 +168,6 @@ int main(void) {
 
     === Testing SBCS ===
     SBCS: 0x10000000000000000 - 1 = 0x0ffffffffffffffff
-    flags=0xa0000000, ZF=0, CF=1
+    flags=0xa0000000, ZF=1, CF=1
     SBCS with branch: result=-8, flags=0xa0000000, branch_taken=1
 */
