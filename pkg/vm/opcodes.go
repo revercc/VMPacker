@@ -182,6 +182,7 @@ const (
 	// 栈设置flags
 	OpSAdSetflags byte = 0x98 // pop bits,hasCarry,b,a,result → set flags 1B
 	OpSSuSetflags byte = 0x99 // pop bits,hasCarry,b,a,result → set flags 1B
+	OpSAnSetflags byte = 0x9A // pop bits,result → set flags 1B
 )
 
 // 标志位

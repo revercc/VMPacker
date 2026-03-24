@@ -152,6 +152,7 @@ var opTable = map[byte]opInfo{
 	OpSSt64:       {"S_ST64", 1},
 	OpSAdSetflags: {"S_AdSetflags", 1},
 	OpSSuSetflags: {"S_SuSetflags", 1},
+	OpSAnSetflags: {"S_AnSetflags", 1},
 }
 
 // InstructionSize 返回指定 opcode 的指令总字节数 (0 = 未知)

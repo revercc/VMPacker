@@ -146,6 +146,7 @@ static inline u8 vm_insn_size(u8 op) {
   case OP_S_ST64:
   case OP_S_AD_SETFLAGS:
   case OP_S_SU_SETFLAGS:
+  case OP_S_AN_SETFLAGS:
     return 1;
   case OP_S_VLOAD:
   case OP_S_VSTORE:

@@ -414,7 +414,7 @@ func (t *Translator) translateOne(instructions []vm.Instruction, idx int) (int, 
 			t.sDrop()
 			return 0, nil
 		}
-		return 0, t.trStackAluReg(inst, vm.OpSAnd)
+		return 0, t.trStackAluRegFlags(inst, vm.OpSAnd, true)
 
 	case BIC:
 		return 0, t.trStackBitLogicalNot(inst, vm.OpSAnd, false)

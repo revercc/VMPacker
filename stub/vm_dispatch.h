@@ -445,6 +445,10 @@ __attribute__((noinline)) VM_SECTION_ALU static u32 hw_s_su_setflags(vm_ctx_t *v
   return h_s_su_setflags(vm);
 }
 
+__attribute__((noinline)) VM_SECTION_ALU static u32 hw_s_an_setflags(vm_ctx_t *vm) {
+  return h_s_an_setflags(vm);
+}
+
 /* ---- 栈内存 ---- */
 __attribute__((noinline)) VM_SECTION_MEM static u32 hw_s_ld8(vm_ctx_t *vm) {
   return h_s_ld8(vm);
@@ -635,6 +639,7 @@ __attribute__((noinline)) static void vm_init_jump_table(vm_handler_fn *tbl) {
   tbl[OP_S_ST64] = hw_s_st64;
   tbl[OP_S_AD_SETFLAGS] = hw_s_ad_setflags;
   tbl[OP_S_SU_SETFLAGS] = hw_s_su_setflags;
+  tbl[OP_S_AN_SETFLAGS] = hw_s_an_setflags;
 }
 
 #endif /* VM_INDIRECT_DISPATCH */

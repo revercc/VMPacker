@@ -151,6 +151,14 @@ func (t *Translator) trStackAluRegFlags(inst vm.Instruction, sOp byte, setFlags 
 				t.sPushImm32(32)
 			}
 			t.emit(vm.OpSSuSetflags) // set flags for subtraction
+		} else if sOp == vm.OpSAnd {
+			t.sDup()
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSAnSetflags)
 		}
 	}
 
@@ -211,6 +219,14 @@ func (t *Translator) trStackAluImmFlags(inst vm.Instruction, sOp byte, setFlags 
 				t.sPushImm32(32)
 			}
 			t.emit(vm.OpSSuSetflags) // set flags for subtraction
+		} else if sOp == vm.OpSAnd {
+			t.sDup()
+			if inst.SF {
+				t.sPushImm32(64)
+			} else {
+				t.sPushImm32(32)
+			}
+			t.emit(vm.OpSAnSetflags)
 		} else {
 			t.sDup()
 			t.sPushImm32(0)
