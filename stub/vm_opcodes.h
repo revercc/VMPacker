@@ -194,7 +194,8 @@
 #define OP_S_ST64 0x97 /* pop val,addr → *(u64*)addr=val  1B */
 
 /* ---- 栈设置标志位 ---- */
-#define OP_S_AD_SETFLAGS 0x98 /* pop result,bits,hasCarry,b,a → set flags 1B */
-#define OP_S_SU_SETFLAGS 0x99 /* pop result,bits,hasCarry,b,a → set flags 1B */
+#define OP_S_AD_SETFLAGS 0x98 /* pop bits,hasCarry,b,a,result → set flags 1B */
+#define OP_S_SU_SETFLAGS 0x99 /* pop bits,hasCarry,b,a,result → set flags 1B */
+#define OP_S_AN_SETFLAGS 0x9A /* pop bits,result → set flags 1B */
 
 #endif /* VM_OPCODES_H */

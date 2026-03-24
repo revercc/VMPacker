@@ -356,6 +356,30 @@ static inline u32 h_s_su_setflags(vm_ctx_t *vm) {
     return 1;
 }
 
+// 与运算标志设置 (ANDS)
+static inline u32 h_s_an_setflags(vm_ctx_t *vm) {
+    u64 bits = SPOP(vm), result = SPOP(vm);
+    if(bits == 32) {
+        result &= 0xFFFFFFFF;
+    }
+    vm->FL = 0;
+    // C清零
+    vm->FL |= FL_CARRY;
+
+    // Z: 结果为零
+    if (result == 0)
+        vm->FL |= FL_ZERO;
+    
+    // N: 结果的最高位（有符号负数）
+    if(bits == 32){
+      if ((i32)result < 0)
+        vm->FL |= FL_SIGN;
+    } else {
+      if ((i64)result < 0)
+        vm->FL |= FL_SIGN;
+    }
+    return 1;
+}
 
 /* ================================================================
  * 栈内存访问
